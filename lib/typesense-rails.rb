@@ -55,7 +55,7 @@ module Typesense
 
     # Typesense settings
     OPTIONS = %i[
-      multi_way_synonyms one_way_synonyms predefined_fields default_sorting_field
+      multi_way_synonyms one_way_synonyms predefined_fields default_sorting_field token_separators
     ]
     OPTIONS.each do |k|
       define_method k do |v|
@@ -252,19 +252,21 @@ module Typesense
       default_sorting_field = settings.get_setting(:default_sorting_field)
       multi_way_synonyms = settings.get_setting(:multi_way_synonyms)
       one_way_synonyms = settings.get_setting(:one_way_synonyms)
+      token_separators = settings.get_setting(:token_separators)
       typesense_client.collections.create(
-        { 'name' => collection_name }
-          .merge(
-            if fields
-              { 'fields' => fields.push({ 'name' => 'id',
-                                          'type' => 'string' }) }
-            else
-              { 'fields' => [{ 'name' => 'id', 'type' => 'string' },
-                             { 'name' => '.*',
-                               'type' => 'auto' }] }
-            end,
-            default_sorting_field ? { 'default_sorting_field' => default_sorting_field } : {}
-          )
+        [
+          { 'name' => collection_name },
+          if fields
+            { 'fields' => fields.push({ 'name' => 'id',
+                                        'type' => 'string' }) }
+          else
+            { 'fields' => [{ 'name' => 'id', 'type' => 'string' },
+                            { 'name' => '.*',
+                              'type' => 'auto' }] }
+          end,
+          default_sorting_field ? { 'default_sorting_field' => default_sorting_field } : {},
+          token_separators ? { 'token_separators' => token_separators } : {},
+        ].inject(&:merge)
       )
       Rails.logger.info "Collection '#{collection_name}' created!"
 
