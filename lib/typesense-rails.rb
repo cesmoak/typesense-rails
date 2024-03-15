@@ -17,9 +17,9 @@ rescue LoadError
   # no queue support, fine
 end
 
-require 'logger'
-Rails.logger = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new(STDOUT))
-Rails.logger.level = Logger::INFO
+# require 'logger'
+# Rails.logger = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new(STDOUT))
+# Rails.logger.level = Logger::INFO
 
 module Typesense
   class NotConfigured < StandardError; end
@@ -331,6 +331,8 @@ module Typesense
     end
 
     def typesense_search_collection(search_parameters, collection)
+      pp typesense_client.collections[collection]
+      pp search_parameters
       typesense_client.collections[collection].documents.search(search_parameters)
     end
 
