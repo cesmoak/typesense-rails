@@ -17,9 +17,9 @@ rescue LoadError
   # no queue support, fine
 end
 
-require 'logger'
-Rails.logger = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new(STDOUT))
-Rails.logger.level = Logger::INFO
+# require 'logger'
+# Rails.logger = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new(STDOUT))
+# Rails.logger.level = Logger::INFO
 
 module Typesense
   class NotConfigured < StandardError; end
@@ -56,6 +56,7 @@ module Typesense
     # Typesense settings
     OPTIONS = %i[
       multi_way_synonyms one_way_synonyms predefined_fields default_sorting_field token_separators
+      enable_nested_fields
     ]
     OPTIONS.each do |k|
       define_method k do |v|
@@ -253,6 +254,7 @@ module Typesense
       multi_way_synonyms = settings.get_setting(:multi_way_synonyms)
       one_way_synonyms = settings.get_setting(:one_way_synonyms)
       token_separators = settings.get_setting(:token_separators)
+      enable_nested_fields = settings.get_setting(:enable_nested_fields)
       typesense_client.collections.create(
         [
           { 'name' => collection_name },
@@ -266,6 +268,7 @@ module Typesense
           end,
           default_sorting_field ? { 'default_sorting_field' => default_sorting_field } : {},
           token_separators ? { 'token_separators' => token_separators } : {},
+          enable_nested_fields ? { 'enable_nested_fields' => enable_nested_fields } : {},
         ].inject(&:merge)
       )
       Rails.logger.info "Collection '#{collection_name}' created!"
@@ -328,6 +331,8 @@ module Typesense
     end
 
     def typesense_search_collection(search_parameters, collection)
+      pp typesense_client.collections[collection]
+      pp search_parameters
       typesense_client.collections[collection].documents.search(search_parameters)
     end
 
@@ -357,7 +362,7 @@ module Typesense
       self.typesensesearch_settings = IndexSettings.new(options, &block)
       self.typesensesearch_options = { type: typesense_full_const_get(model_name.to_s) }.merge(options) # :per_page => typesensesearch_settings.get_setting(:hitsPerPage) || 10, :page => 1
       self.typesense_client ||= Typesense.client
-      attr_accessor :highlight_result, :snippet_result
+      attr_accessor :highlight_result_object, :highlight_result, :snippet_result
 
       if options[:enqueue]
         proc = if options[:enqueue] == true
@@ -663,6 +668,7 @@ module Typesense
         o = results_by_id[hit['document']['id'].to_s]
         next unless o
 
+        o.highlight_result_object = hit['highlight']
         o.highlight_result = hit['highlights']
         o.snippet_result = hit['highlights'].map do |highlight|
           highlight['snippet']
