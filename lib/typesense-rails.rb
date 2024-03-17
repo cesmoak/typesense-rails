@@ -331,8 +331,6 @@ module Typesense
     end
 
     def typesense_search_collection(search_parameters, collection)
-      pp typesense_client.collections[collection]
-      pp search_parameters
       typesense_client.collections[collection].documents.search(search_parameters)
     end
 
