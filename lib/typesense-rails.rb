@@ -248,15 +248,16 @@ module Typesense
       "#{typesense_index_name(options)}_#{Time.now.to_i}"
     end
 
-    def typesense_create_collection(collection_name, settings = nil)
+    def local_collection_schema(collection_name, settings)
       fields = settings.get_setting(:predefined_fields)
       default_sorting_field = settings.get_setting(:default_sorting_field)
       multi_way_synonyms = settings.get_setting(:multi_way_synonyms)
       one_way_synonyms = settings.get_setting(:one_way_synonyms)
       token_separators = settings.get_setting(:token_separators)
       enable_nested_fields = settings.get_setting(:enable_nested_fields)
-      typesense_client.collections.create(
-        [
+
+      {
+        collection: [
           { 'name' => collection_name },
           if fields
             { 'fields' => fields.push({ 'name' => 'id',
@@ -269,13 +270,98 @@ module Typesense
           default_sorting_field ? { 'default_sorting_field' => default_sorting_field } : {},
           token_separators ? { 'token_separators' => token_separators } : {},
           enable_nested_fields ? { 'enable_nested_fields' => enable_nested_fields } : {},
-        ].inject(&:merge)
+        ].inject(&:merge),
+        multi_way_synonyms: multi_way_synonyms,
+        one_way_synonyms: one_way_synonyms, 
+      }
+    end
+
+    def is_typesense_schema_changed?
+      typesense_schema_changes.count > 0
+    end
+
+    def typesense_schema_changes
+      typesense_configurations.each do |options, settings|
+        index_name = options[:index_name]
+
+        local_schema = local_collection_schema(index_name, settings)
+        remote_schema = typesense_get_collection(index_name)
+        return ["remote schema is missing"] unless remote_schema
+        return typesense_schema_changes_internal(local_schema, remote_schema)
+      end
+      []
+    end
+
+    def typesense_schema_changes_internal(local_schema, remote_schema)
+      changes = []
+      name_matches = remote_schema["name"].starts_with?(local_schema[:collection]["name"])
+      token_separators_match = remote_schema["token_separators"] == local_schema[:collection]["token_separators"]
+      enable_nested_fields_matches = remote_schema["enable_nested_fields"] == local_schema[:collection]["enable_nested_fields"].present?
+      remote_field_names = ((remote_schema["fields"].map {|field| field["name"]}).reject {|name| name.include? "."}).to_set
+      local_field_names = (local_schema[:collection]["fields"].map {|field| field[:name]}).compact.to_set
+      field_names_match = remote_field_names == local_field_names
+      fields_match = remote_schema["fields"].all? do |remote_field|
+        next if remote_field["name"].include? "." # skip nested fields
+        local_field = local_schema[:collection]["fields"].find {|field| field[:name] == remote_field["name"]}
+        next unless local_field.present?
+        type_matches = remote_field["type"] == local_field[:type]
+        facet_matches = remote_field["facet"] == local_field[:facet].present?
+        infix_matches = remote_field["infix"] == local_field[:infix].present?
+        index_matches = remote_field["index"] == local_field.key?(:index) ? local_field[:index] : true
+        optional_matches = remote_field["optional"] == local_field[:optional].present?
+        sort_matches = remote_field["sort"] == (local_field.key?(:sort) ? local_field[:sort] : (local_field[:facet] ? !["string", "string[]", "object"].include?(local_field[:type]) : false))
+        matches = (
+          type_matches and 
+          facet_matches and 
+          infix_matches and 
+          index_matches and 
+          optional_matches and 
+          sort_matches
+        )
+        unless matches
+          field_changes = []
+          field_changes << "type" unless type_matches
+          field_changes << "facet" unless facet_matches
+          field_changes << "infix" unless infix_matches
+          field_changes << "index" unless index_matches
+          field_changes << "optional" unless optional_matches
+          field_changes << "sort" unless sort_matches
+          changes << "field #{remote_field["name"]}: #{field_changes.join(", ")}"
+        end
+        matches
+      end
+      matches = (
+        name_matches and
+        token_separators_match and
+        enable_nested_fields_matches and
+        field_names_match and
+        fields_match
       )
+      unless matches
+        changes << "name" unless name_matches
+        changes << "token_separators" unless token_separators_match
+        changes << "enable_nested_fields" unless enable_nested_fields_matches
+        missing_local_fields = remote_field_names - local_field_names
+        if missing_local_fields.count > 0
+          changes << "missing local fields: #{missing_local_fields.to_a.join(", ")}"
+        end
+        missing_remote_fields = local_field_names - remote_field_names
+        if missing_remote_fields.count > 0
+          changes << "missing remote fields: #{missing_remote_fields.to_a.join(", ")}"
+        end
+      end
+      changes
+    end
+
+    def typesense_create_collection(collection_name, settings = nil)
+      schema = local_collection_schema(collection_name, settings)
+
+      typesense_client.collections.create(schema[:collection])
       Rails.logger.info "Collection '#{collection_name}' created!"
 
-      typesense_multi_way_synonyms(collection_name, multi_way_synonyms) if multi_way_synonyms
+      typesense_multi_way_synonyms(collection_name, schema[:multi_way_synonyms]) if schema[:multi_way_synonyms]
 
-      typesense_one_way_synonyms(collection_name, one_way_synonyms) if one_way_synonyms
+      typesense_one_way_synonyms(collection_name, schema[:one_way_synonyms]) if schema[:one_way_synonyms]
     end
 
     def typesense_upsert_alias(collection_name, alias_name)
